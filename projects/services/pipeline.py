@@ -26,7 +26,16 @@ def _progress_cb(project: VideoProject):
     """Build a closure that updates the project's progress + log fields."""
     lock = threading.Lock()
 
-    def cb(stage: str, label: str, percent: int) -> None:
+    def cb(*args) -> None:
+        # Accept either (stage, label, percent) or (stage, label, percent, sub).
+        if len(args) == 4:
+            stage, label, percent, _sub = args
+        elif len(args) == 3:
+            stage, label, percent = args
+        else:
+            return
+        # Coarse bars advance monotonically; fine sub-percent is allowed to
+        # move freely between coarse checkpoints.
         with lock:
             project.current_stage = label
             project.progress = max(project.progress, int(percent))
@@ -99,6 +108,8 @@ def _run(project: VideoProject) -> None:
         fps=project.fps,
         bitrate=project.bitrate,
         max_duration=project.max_duration,
+        start_seconds=project.start_seconds or 0.0,
+        end_seconds=project.end_seconds or 0.0,
         ken_burns=project.ken_burns,
         music_volume=project.music_volume,
         original_audio_volume=project.original_audio_volume,

@@ -82,6 +82,12 @@ class VideoProject(models.Model):
     max_duration = models.IntegerField(
         default=0, help_text="Trim to N seconds (0 = keep full duration)"
     )
+    start_seconds = models.FloatField(
+        default=0.0, help_text="Trim start point in seconds (0 = from beginning)"
+    )
+    end_seconds = models.FloatField(
+        default=0.0, help_text="Trim end point in seconds (0 = until end of clip)"
+    )
     ken_burns = models.BooleanField(
         default=False, help_text="Slow pan/zoom (good for photo slideshows)"
     )

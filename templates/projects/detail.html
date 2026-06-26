@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load project_extras %}
 {% block title %}Project #{{ project.pk }}{% endblock %}
 {% block content %}
 
@@ -57,6 +58,12 @@
           <div class="col-md-6"><span class="text-muted">Status:</span>
             <span id="status-badge" class="fw-medium">{{ project.get_status_display }}</span>
           </div>
+          <div class="col-md-6"><span class="text-muted">Source:</span>
+            <span class="fw-medium">
+              {% if project.duration_seconds %}{{ project.duration_seconds|durationformat }}{% else %}—{% endif %}
+              {% if project.width and project.height %} · {{ project.width }}×{{ project.height }}{% endif %}
+            </span>
+          </div>
           <div class="col-md-6"><span class="text-muted">Aspect:</span>
             <span class="fw-medium">{{ project.aspect_ratio }}</span>
           </div>
@@ -65,6 +72,13 @@
           </div>
           <div class="col-md-6"><span class="text-muted">Bitrate:</span>
             <span class="fw-medium">{{ project.bitrate }}</span>
+          </div>
+          <div class="col-md-6"><span class="text-muted">Trim:</span>
+            <span class="fw-medium">
+              {% if project.start_seconds or project.end_seconds %}
+                {{ project.start_seconds|default:0 }}s – {{ project.end_seconds|default:project.duration_seconds|durationformat }}
+              {% else %}—{% endif %}
+            </span>
           </div>
           {% if project.output_filename %}
             <div class="col-md-6"><span class="text-muted">Output:</span>

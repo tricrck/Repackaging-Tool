@@ -28,6 +28,8 @@ class ProjectForm(forms.ModelForm):
             "fps",
             "bitrate",
             "max_duration",
+            "start_seconds",
+            "end_seconds",
             "ken_burns",
         ]
         widgets = {
@@ -69,6 +71,18 @@ class ProjectForm(forms.ModelForm):
                 "min": "0",
                 "placeholder": "0 = keep full duration",
             }),
+            "start_seconds": forms.NumberInput(attrs={
+                "class": _TEXT_CLASSES,
+                "min": "0",
+                "step": "0.1",
+                "placeholder": "0",
+            }),
+            "end_seconds": forms.NumberInput(attrs={
+                "class": _TEXT_CLASSES,
+                "min": "0",
+                "step": "0.1",
+                "placeholder": "0 = until end",
+            }),
             "ken_burns": forms.CheckboxInput(attrs={"class": _CHECK_CLASSES}),
         }
 
@@ -77,6 +91,17 @@ class ProjectForm(forms.ModelForm):
         song_url = cleaned.get("song_url")
         song_file = cleaned.get("song_file")
         original = cleaned.get("original")
+
+        # Trim-window validation runs first so the user sees the specific
+        # problem even if they forgot to attach a file.
+        start = cleaned.get("start_seconds") or 0.0
+        end = cleaned.get("end_seconds") or 0.0
+        if start < 0 or end < 0:
+            raise forms.ValidationError("Start and end seconds must be >= 0.")
+        if end and start and end <= start:
+            raise forms.ValidationError(
+                "End seconds must be greater than start seconds."
+            )
 
         if not original:
             raise forms.ValidationError("Please upload a source video.")

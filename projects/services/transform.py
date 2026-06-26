@@ -2,11 +2,12 @@
 Video transformation pipeline.
 
 Operations (all optional):
+- Trim to a start/end window (or to a max duration).
 - Resize / pad to target aspect ratio (9:16, 16:9, 1:1, 4:5, or keep source).
-- Trim to max duration.
 - Mix background music with original audio at configurable volumes.
 - Apply Ken Burns pan/zoom (useful for image slideshows).
-- Re-encode with chosen codec, fps, bitrate.
+- Re-encode with chosen codec, fps, bitrate, with real per-block progress
+  forwarded via the ffmpeg `-progress pipe:1` runner.
 
 This is a normal creator repackaging pipeline. There is intentionally no
 watermark removal, no perceptual-hash-noise, no QR/code obfuscation, and no
@@ -16,11 +17,12 @@ from __future__ import annotations
 
 import logging
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+
+from .ffmpeg_runner import encode_with_progress
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +40,10 @@ def _ensure_moviepy():
     return VideoFileClip, AudioFileClip, CompositeAudioClip
 
 
-ProgressCB = Optional[Callable[[str, str, int], None]]
-# signature: progress_cb(stage_key, label, percent)
+# progress_cb signatures:
+#   (stage, label, percent) — coarse stage transitions
+#   (stage, label, percent, sub) — fine sub-stage percent (e.g. encode block percent)
+ProgressCB = Optional[Callable[..., None]]
 
 
 @dataclass
@@ -50,6 +54,8 @@ class TransformParams:
     fps: int = 30
     bitrate: str = "2M"
     max_duration: int = 0          # 0 = keep full duration
+    start_seconds: float = 0.0     # trim start (0 = from beginning)
+    end_seconds: float = 0.0       # trim end   (0 = until end of clip)
     ken_burns: bool = False
     music_volume: float = 0.8
     original_audio_volume: float = 0.2
@@ -77,15 +83,12 @@ def _resize_and_pad(clip, target_w: int, target_h: int, pad_rgb: tuple[int, int,
     tgt_ratio = target_w / target_h
 
     if src_ratio > tgt_ratio:
-        # Source is wider — fit width, pad top/bottom
         new_w = target_w
         new_h = int(round(target_w / src_ratio))
     else:
-        # Source is taller — fit height, pad left/right
         new_h = target_h
         new_w = int(round(target_h * src_ratio))
 
-    # Even dimensions are required by yuv420p / most codecs
     new_w -= new_w % 2
     new_h -= new_h % 2
 
@@ -97,15 +100,14 @@ def _resize_and_pad(clip, target_w: int, target_h: int, pad_rgb: tuple[int, int,
     pad_bottom = target_h - new_h - pad_top
 
     if pad_left or pad_right or pad_top or pad_bottom:
-        # moviepy 2.x: with_margin is removed; we use resized on a padded canvas.
         from moviepy.video.VideoClip import ColorClip  # type: ignore
-        canvas = ColorClip(size=(target_w, target_h), color=pad_rgb, duration=clip.duration)
-        # Position the resized clip centred on the canvas
-        canvas = canvas.with_position(("center", "center")).with_duration(clip.duration)
-        # CompositeVideoClip with a static colour background
         from moviepy import CompositeVideoClip  # type: ignore
-        return CompositeVideoClip([canvas, resized.with_position(("center", "center"))],
-                                  size=(target_w, target_h)).with_duration(clip.duration)
+        canvas = ColorClip(size=(target_w, target_h), color=pad_rgb, duration=clip.duration)
+        canvas = canvas.with_position(("center", "center")).with_duration(clip.duration)
+        return CompositeVideoClip(
+            [canvas, resized.with_position(("center", "center"))],
+            size=(target_w, target_h),
+        ).with_duration(clip.duration)
     return resized
 
 
@@ -120,13 +122,22 @@ def _ken_burns(clip):
         zoom = 1.0 + 0.04 * (t / duration)
         h, w = frame.shape[:2]
         new_w, new_h = int(w * zoom), int(h * zoom)
-        import cv2  # local import — only needed for ken_burns path
+        import cv2
         resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
         x1 = (new_w - w) // 2
         y1 = (new_h - h) // 2
         return resized[y1:y1 + h, x1:x1 + w]
 
     return clip.transform(filter)
+
+
+def _emit(progress_cb, stage: str, label: str, percent: int) -> None:
+    if progress_cb:
+        try:
+            progress_cb(stage, label, percent)
+        except TypeError:
+            # Old single-arg callback (e.g. tests). Ignore.
+            pass
 
 
 def transform_video(
@@ -146,61 +157,65 @@ def transform_video(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if progress_cb:
-        progress_cb("load", "Loading source video", 5)
+    _emit(progress_cb, "load", "Loading source video", 5)
 
     clip = VideoFileClip(str(input_path))
     try:
-        # 1. Trim to max duration
+        # 1. Trim window
+        if params.start_seconds and params.start_seconds > 0:
+            start = min(params.start_seconds, max(0, clip.duration - 0.05))
+        else:
+            start = 0.0
+        if params.end_seconds and params.end_seconds > 0:
+            end = min(params.end_seconds, clip.duration)
+        else:
+            end = clip.duration
+        if end > start:
+            clip = clip.subclipped(start, end)
+        if start or (params.end_seconds and params.end_seconds > 0):
+            _emit(progress_cb, "trim", f"Trimmed {start:.2f}s–{end:.2f}s", 12)
+
+        # 2. max_duration caps the trimmed window
         if params.max_duration and params.max_duration > 0 and clip.duration > params.max_duration:
             clip = clip.subclipped(0, params.max_duration)
+            _emit(progress_cb, "trim", f"Clipped to {params.max_duration}s", 15)
 
-        # 2. Aspect-ratio resize/pad
+        # 3. Aspect-ratio resize/pad
         if params.aspect_ratio in _TARGETS:
             tw, th = _TARGETS[params.aspect_ratio]
             pad_rgb = hex_to_rgb(params.pad_color)
             clip = _resize_and_pad(clip, tw, th, pad_rgb)
-            if progress_cb:
-                progress_cb("resize", f"Resized to {params.aspect_ratio}", 25)
+            _emit(progress_cb, "resize", f"Resized to {params.aspect_ratio}", 25)
 
-        # 3. Ken Burns
+        # 4. Ken Burns
         if params.ken_burns:
             clip = _ken_burns(clip)
-            if progress_cb:
-                progress_cb("ken_burns", "Applied Ken Burns pan/zoom", 35)
+            _emit(progress_cb, "ken_burns", "Applied Ken Burns pan/zoom", 35)
 
-        # 4. Audio
+        # 5. Audio
+        has_audio_in_output = False
         if audio_path and Path(audio_path).exists():
             music = AudioFileClip(str(audio_path))
             if music.duration < clip.duration:
-                music = music.with_duration(clip.duration)  # moviepy 2.x
-                # In moviepy 2.x there's no .loop(); we just let ffmpeg handle looping
-                # by setting duration slightly longer than clip — but cleaner is to
-                # use audio_loop if available:
                 try:
                     music = music.loop(duration=clip.duration)  # type: ignore[attr-defined]
                 except AttributeError:
                     music = music.with_duration(clip.duration)
             else:
                 music = music.subclipped(0, clip.duration)
-
             music = music.with_volume_scaled(params.music_volume)
-
             components = [music]
             if clip.audio is not None:
                 components.append(clip.audio.with_volume_scaled(params.original_audio_volume))
             clip = clip.with_audio(CompositeAudioClip(components))
-            if progress_cb:
-                progress_cb("audio_mix", "Mixed background music", 50)
+            has_audio_in_output = True
+            _emit(progress_cb, "audio_mix", "Mixed background music", 50)
         elif clip.audio is not None:
-            # No background music — keep original audio at requested volume
             clip = clip.with_audio(clip.audio.with_volume_scaled(params.original_audio_volume))
+            has_audio_in_output = True
 
-        # 5. Write intermediate (moviepy handles codec/fps), then a final ffmpeg
-        #    pass to enforce container flags and bitrate.
-        if progress_cb:
-            progress_cb("encode", f"Encoding with {params.codec} @ {params.fps}fps", 60)
-
+        # 6. Moviepy encode → intermediate file
+        _emit(progress_cb, "encode_prep", f"Preparing encode ({params.codec} @ {params.fps}fps)", 60)
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             tmp_path = Path(tmp.name)
 
@@ -212,38 +227,42 @@ def transform_video(
                 fps=params.fps,
                 bitrate=params.bitrate,
                 preset="medium",
-                logger=None,  # moviepy prints a lot; keep it quiet
+                logger=None,
             )
 
-            if progress_cb:
-                progress_cb("container", "Finalising MP4 container", 90)
+            # 7. Final pass: real progress from ffmpeg -progress pipe:1
+            _emit(progress_cb, "encode", f"Encoding with {params.codec} @ {params.fps}fps", 65)
 
-            _ffmpeg_finalize(tmp_path, output_path, params.codec)
+            # Build a per-block progress callback that maps 0..100 from
+            # ffmpeg onto the 65..95 slice of our overall bar.
+            def ffmpeg_progress(pct: int) -> None:
+                # pct is 0..100 from ffmpeg; map to 65..95 of the overall bar
+                overall = 65 + int(pct * 0.30)
+                _emit(progress_cb, "encode", f"Encoding {pct}%", overall)
+
+            ok = encode_with_progress(
+                input_path=tmp_path,
+                output_path=output_path,
+                codec=params.codec,
+                fps=params.fps,
+                bitrate=params.bitrate,
+                width=clip.w,
+                height=clip.h,
+                duration_seconds=clip.duration,
+                has_audio=has_audio_in_output,
+                progress_cb=ffmpeg_progress,
+            )
+            if not ok:
+                logger.warning("ffmpeg progress pass failed; falling back to direct copy")
+                shutil.copy2(str(tmp_path), str(output_path))
+                _emit(progress_cb, "container", "Re-muxed (fallback copy)", 95)
+            else:
+                _emit(progress_cb, "container", "Finalised MP4 container", 95)
         finally:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
 
-        if progress_cb:
-            progress_cb("done", "Finished", 100)
-
+        _emit(progress_cb, "done", "Finished", 100)
         return output_path
     finally:
         clip.close()
-
-
-def _ffmpeg_finalize(input_path: Path, output_path: Path, codec: str) -> None:
-    """Re-mux with faststart + ensure yuv420p for broad compatibility."""
-    cmd = [
-        "ffmpeg", "-y", "-i", str(input_path),
-        "-c:v", codec,
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        "-c:a", "aac",
-        str(output_path),
-    ]
-    # Skip the re-encode pass if the codec isn't supported by the installed ffmpeg.
-    # Best-effort: try, and if ffmpeg errors out, fall back to a straight copy.
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        logger.warning("ffmpeg finalize failed (%s); falling back to copy", result.stderr[:200])
-        shutil.copy2(str(input_path), str(output_path))

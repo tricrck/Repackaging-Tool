@@ -42,12 +42,32 @@ def project_new(request):
             project.original_filename = upload.name
             project.status = "queued"
             project.save()
+            # Probe the freshly-saved upload so the detail page can show
+            # duration / dimensions without re-running ffprobe later.
+            _populate_metadata(project)
             messages.success(request, f"Project #{project.pk} created — kicking off pipeline.")
             start_in_thread(project.pk)
             return redirect("project_detail", pk=project.pk)
     else:
         form = ProjectForm()
     return render(request, "projects/new.html", {"form": form})
+
+
+def _populate_metadata(project: "VideoProject") -> None:
+    """Probe the source video and write duration/width/height onto the row."""
+    from .services.probe import probe, ffprobe_available
+    if not ffprobe_available():
+        return
+    try:
+        info = probe(project.original.path)
+    except Exception:  # noqa: BLE001
+        return
+    if not info:
+        return
+    project.duration_seconds = info["duration"] or None
+    project.width = info["width"] or None
+    project.height = info["height"] or None
+    project.save(update_fields=["duration_seconds", "width", "height", "updated_at"])
 
 
 def project_detail(request, pk: int):
