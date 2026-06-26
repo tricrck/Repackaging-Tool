@@ -1,0 +1,26 @@
+# Core framework
+Django>=5.1,<5.2
+
+# Video processing
+moviepy>=2.1,<3.0
+opencv-python-headless>=4.8
+Pillow>=10.0,<12.0
+numpy>=1.26
+imageio>=2.34
+imageio-ffmpeg>=0.5
+decorator>=5.1
+proglog<=1.0.0
+
+# Audio downloading
+yt-dlp>=2024.8.6
+# spotdl is optional — only needed for Spotify support.
+# It is heavy and pulls in additional deps; install on demand:
+#   pip install spotdl
+# spotdl>=4.4
+
+# CLI / config
+tqdm>=4.66
+python-dotenv>=1.0
+
+# Note: Bootstrap 5 is loaded from a CDN in templates/base.html.
+# No build tools, no npm, no Tailwind.

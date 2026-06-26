@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}New project{% endblock %}
+{% block content %}
+
+<div class="mb-4">
+  <h1 class="h3 fw-bold mb-1">New project</h1>
+  <p class="text-muted small mb-0">Upload a clip, choose audio, pick your target output.</p>
+</div>
+
+<form method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">
+          <i class="bi bi-camera-video me-1"></i> Source
+        </div>
+        <div class="card-body">
+          <div class="mb-3">
+            <label for="{{ form.title.id_for_label }}" class="form-label">Title</label>
+            {{ form.title }}
+          </div>
+          <div class="mb-2">
+            <label for="{{ form.original.id_for_label }}" class="form-label">
+              Video file <span class="text-danger">*</span>
+            </label>
+            {{ form.original }}
+            {% if form.original.errors %}
+              <div class="invalid-feedback d-block">{{ form.original.errors|join:", " }}</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="card shadow-sm mt-3">
+        <div class="card-header bg-light fw-semibold">
+          <i class="bi bi-music-note-beamed me-1"></i> Audio
+        </div>
+        <div class="card-body">
+          <div class="mb-3">
+            <label for="{{ form.song_url.id_for_label }}" class="form-label">Song URL (YouTube or Spotify)</label>
+            {{ form.song_url }}
+          </div>
+          <div class="text-center text-muted small my-2">— or —</div>
+          <div class="mb-3">
+            <label for="{{ form.song_file.id_for_label }}" class="form-label">Upload audio file</label>
+            {{ form.song_file }}
+          </div>
+          <div class="row g-3 mt-2">
+            <div class="col-md-6">
+              <label for="{{ form.music_volume.id_for_label }}" class="form-label small">
+                Music volume: <span id="mv-val">{{ form.music_volume.value }}</span>
+              </label>
+              {{ form.music_volume }}
+            </div>
+            <div class="col-md-6">
+              <label for="{{ form.original_audio_volume.id_for_label }}" class="form-label small">
+                Original audio: <span id="ov-val">{{ form.original_audio_volume.value }}</span>
+              </label>
+              {{ form.original_audio_volume }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light fw-semibold">
+          <i class="bi bi-gear me-1"></i> Output
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label for="{{ form.aspect_ratio.id_for_label }}" class="form-label">Aspect ratio</label>
+              {{ form.aspect_ratio }}
+            </div>
+            <div class="col-md-6">
+              <label for="{{ form.codec.id_for_label }}" class="form-label">Codec</label>
+              {{ form.codec }}
+            </div>
+            <div class="col-md-6">
+              <label for="{{ form.fps.id_for_label }}" class="form-label">FPS</label>
+              {{ form.fps }}
+            </div>
+            <div class="col-md-6">
+              <label for="{{ form.bitrate.id_for_label }}" class="form-label">Bitrate</label>
+              {{ form.bitrate }}
+            </div>
+            <div class="col-md-6">
+              <label for="{{ form.pad_color.id_for_label }}" class="form-label">Pad colour</label>
+              <div>{{ form.pad_color }}</div>
+            </div>
+            <div class="col-md-6">
+              <label for="{{ form.max_duration.id_for_label }}" class="form-label">Max duration (sec)</label>
+              {{ form.max_duration }}
+              <div class="form-text">0 = keep full duration</div>
+            </div>
+          </div>
+          <div class="form-check mt-3">
+            {{ form.ken_burns }}
+            <label for="{{ form.ken_burns.id_for_label }}" class="form-check-label">
+              Ken Burns pan/zoom (good for photo slideshows)
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {% if form.non_field_errors %}
+        <div class="alert alert-danger mt-3 mb-0 small">
+          {{ form.non_field_errors|join:", " }}
+        </div>
+      {% endif %}
+
+      <button type="submit" class="btn btn-primary btn-lg w-100 mt-3">
+        <i class="bi bi-play-fill"></i> Create &amp; start pipeline
+      </button>
+    </div>
+  </div>
+</form>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  // Live-update range slider value labels
+  document.querySelectorAll('input[type="range"]').forEach(function (el) {
+    const targetId = el.name === 'music_volume' ? 'mv-val' : 'ov-val';
+    const label = document.getElementById(targetId);
+    if (!label) return;
+    el.addEventListener('input', function () { label.textContent = el.value; });
+  });
+</script>
+{% endblock %}

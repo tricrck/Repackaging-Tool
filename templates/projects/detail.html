@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Project #{{ project.pk }}{% endblock %}
+{% block content %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-start mb-4">
+  <div>
+    <a href="{% url 'project_list' %}" class="small text-muted text-decoration-none">
+      <i class="bi bi-arrow-left"></i> All projects
+    </a>
+    <h1 class="h3 fw-bold mt-1 mb-1">
+      {{ project.title|default:project.original_filename|default:"Project #"|add:project.pk|stringformat:"s" }}
+    </h1>
+    <p class="text-muted small mb-0">Created {{ project.created_at|date:"Y-m-d H:i" }}</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if project.status == 'done' and project.output %}
+      <a href="{% url 'project_download' pk=project.pk %}" class="btn btn-success">
+        <i class="bi bi-download"></i> Download MP4
+      </a>
+    {% endif %}
+    {% if project.is_terminal or project.status == 'queued' %}
+      <form method="post" action="{% url 'project_start' pk=project.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-outline-secondary">
+          <i class="bi bi-arrow-clockwise"></i> Re-run
+        </button>
+      </form>
+    {% endif %}
+    <form method="post" action="{% url 'project_delete' pk=project.pk %}"
+          onsubmit="return confirm('Delete this project and its files?');">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-outline-danger">
+        <i class="bi bi-trash"></i> Delete
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-header bg-light fw-semibold">
+        <i class="bi bi-activity me-1"></i> Pipeline
+      </div>
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <span id="stage-label" class="fw-medium">{{ project.current_stage|default:"Queued" }}</span>
+          <span id="progress-pct" class="text-muted small">{{ project.progress }}%</span>
+        </div>
+        <div class="progress" role="progressbar" style="height: 8px;"
+             aria-valuenow="{{ project.progress }}" aria-valuemin="0" aria-valuemax="100">
+          <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+               style="width: {{ project.progress }}%"></div>
+        </div>
+
+        <div class="row g-2 mt-4 small">
+          <div class="col-md-6"><span class="text-muted">Status:</span>
+            <span id="status-badge" class="fw-medium">{{ project.get_status_display }}</span>
+          </div>
+          <div class="col-md-6"><span class="text-muted">Aspect:</span>
+            <span class="fw-medium">{{ project.aspect_ratio }}</span>
+          </div>
+          <div class="col-md-6"><span class="text-muted">Codec:</span>
+            <span class="fw-medium">{{ project.codec }} @ {{ project.fps }}fps</span>
+          </div>
+          <div class="col-md-6"><span class="text-muted">Bitrate:</span>
+            <span class="fw-medium">{{ project.bitrate }}</span>
+          </div>
+          {% if project.output_filename %}
+            <div class="col-md-6"><span class="text-muted">Output:</span>
+              <span class="fw-medium">{{ project.output_filename }}</span>
+            </div>
+          {% endif %}
+          {% if project.output_size_bytes %}
+            <div class="col-md-6"><span class="text-muted">Size:</span>
+              <span class="fw-medium">{{ project.output_size_bytes|filesizeformat }}</span>
+            </div>
+          {% endif %}
+        </div>
+
+        {% if project.error_message %}
+          <div class="alert alert-danger mt-4 mb-0 small">
+            <strong>Error:</strong> {{ project.error_message }}
+          </div>
+        {% endif %}
+
+        <details class="mt-4">
+          <summary class="text-muted small" style="cursor: pointer;">Pipeline log</summary>
+          <pre id="log-pre" class="pipeline-log mt-2">{{ project.log|default:"(no log yet)" }}</pre>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card shadow-sm">
+      <div class="card-header bg-light fw-semibold">
+        <i class="bi bi-sliders me-1"></i> Settings
+      </div>
+      <div class="card-body">
+        <dl class="row mb-0 small">
+          <dt class="col-7 text-muted">Source</dt>
+          <dd class="col-5 text-truncate fw-medium" title="{{ project.original_filename }}">
+            {{ project.original_filename|default:"—" }}
+          </dd>
+
+          <dt class="col-7 text-muted">Audio source</dt>
+          <dd class="col-5 fw-medium">
+            {% if project.song_file %}uploaded
+            {% elif project.song_url %}URL
+            {% else %}none{% endif %}
+          </dd>
+
+          <dt class="col-7 text-muted">Music vol</dt>
+          <dd class="col-5 fw-medium">{{ project.music_volume }}</dd>
+
+          <dt class="col-7 text-muted">Original vol</dt>
+          <dd class="col-5 fw-medium">{{ project.original_audio_volume }}</dd>
+
+          <dt class="col-7 text-muted">Pad colour</dt>
+          <dd class="col-5 fw-medium">
+            <span class="d-inline-block rounded border align-middle me-1"
+                  style="width: 14px; height: 14px; background: {{ project.pad_color }};"></span>
+            {{ project.pad_color }}
+          </dd>
+
+          <dt class="col-7 text-muted">Max duration</dt>
+          <dd class="col-5 fw-medium">
+            {% if project.max_duration %}{{ project.max_duration }}s{% else %}—{% endif %}
+          </dd>
+
+          <dt class="col-7 text-muted">Ken Burns</dt>
+          <dd class="col-5 fw-medium">
+            {% if project.ken_burns %}yes{% else %}no{% endif %}
+          </dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% if not project.is_terminal %}
+<script>
+  // Poll status every 1.5s until terminal state
+  const statusUrl = "{% url 'project_status' pk=project.pk %}";
+  let pollCount = 0;
+  const maxPolls = 1800;  // ~45 minutes
+
+  async function poll() {
+    if (pollCount++ > maxPolls) return;
+    try {
+      const r = await fetch(statusUrl);
+      if (!r.ok) return;
+      const d = await r.json();
+      const bar = document.getElementById('progress-bar');
+      bar.style.width = d.progress + '%';
+      bar.setAttribute('aria-valuenow', d.progress);
+      document.getElementById('progress-pct').textContent = d.progress + '%';
+      document.getElementById('stage-label').textContent = d.current_stage || '—';
+      document.getElementById('status-badge').textContent = ({
+        draft: 'Draft', queued: 'Queued', running: 'Running',
+        done: 'Completed', failed: 'Failed'
+      })[d.status] || d.status;
+      document.getElementById('log-pre').textContent = d.log || '(no log yet)';
+
+      // Stop the striped animation when complete
+      if (d.status === 'done' || d.status === 'failed') {
+        bar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+        if (d.status === 'failed') bar.classList.replace('bg-primary', 'bg-danger');
+        setTimeout(() => location.reload(), 600);
+        return;
+      }
+    } catch (e) { /* keep polling */ }
+    setTimeout(poll, 1500);
+  }
+  setTimeout(poll, 1000);
+</script>
+{% endif %}
+{% endblock %}
